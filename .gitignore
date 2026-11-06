@@ -1,0 +1,32 @@
+# Dependências instaladas pelo Bun
+node_modules
+
+# Arquivos gerados
+out
+dist
+*.tgz
+
+# Cobertura de testes
+coverage
+*.lcov
+
+# Registros de execução
+logs
+_.log
+report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
+
+# Arquivos locais de configuração
+.env
+.env.*
+!.env.example
+
+# Arquivos de cache
+.eslintcache
+.cache
+*.tsbuildinfo
+
+# Configurações locais do IntelliJ
+.idea
+
+# Metadados de pastas do Finder
+.DS_Store

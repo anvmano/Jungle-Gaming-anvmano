@@ -1,0 +1,660 @@
+{
+  "info": {
+    "name": "Jungle — Reversões e consultas",
+    "description": "Rode os itens 01 a 19 em ordem. A coleção abre uma wallet e testa reversões e consultas. Repare no item 09. O replay do REFUND devolve os 100,00 BRL registrados na operação original, embora o saldo atual seja 20,00 BRL. Os itens 07 e 12 esperam HTTP 422.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "variable": [
+    {
+      "key": "base",
+      "value": "http://127.0.0.1:3001",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "01 — Verificar prontidão",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base}}/health/ready"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o resultado público desta etapa.",
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Dependências disponíveis\", () => pm.expect(resposta).to.eql({status:\"ok\",postgres:true,sqs:true}));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 — Abrir wallet com 100 BRL",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base}}/wallets",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"playerId\": \"{{playerId}}\",\n  \"initialBalance\": {\n    \"amount\": \"100.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Isola esta execução e preserva as identidades para os replays posteriores.",
+              "for (const nome of [\"playerId\", \"chaveBet\", \"chaveWin\", \"chaveRollbackWin\", \"chaveRefund\", \"chaveDuplicada\", \"chaveRollbackRefund\", \"chaveOutraBet\", \"chaveRollbackBet\", \"chaveIncompativel\"]) { pm.collectionVariables.set(nome, pm.variables.replaceIn(\"{{$guid}}\")); }",
+              "pm.collectionVariables.unset(\"walletId\");"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o resultado público desta etapa.",
+              "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+              "const resposta = pm.response.json();",
+              "pm.collectionVariables.set(\"walletId\", resposta.id);",
+              "pm.test(\"Saldo inicial\", () => pm.expect(resposta.balance.amount).to.eql(\"100.00\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 — BET de 80 BRL",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{chaveBet}}"
+          }
+        ],
+        "url": "{{base}}/wagering/transactions",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"providerId\": \"avaliacao-reversoes\",\n  \"externalTransactionId\": \"{{chaveBet}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"rodada-1\",\n  \"gameId\": \"jogo-1\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"80.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o resultado público desta etapa.",
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo 20.00 BRL\", () => pm.expect(resposta.balance).to.eql({\"amount\":\"20.00\",\"currency\":\"BRL\"}));",
+              "pm.test(\"Estado da operação\", () => pm.expect(resposta.status).to.eql(\"PROCESSED\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 — WIN de 30 BRL com referência",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{chaveWin}}"
+          }
+        ],
+        "url": "{{base}}/wagering/transactions",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"providerId\": \"avaliacao-reversoes\",\n  \"externalTransactionId\": \"{{chaveWin}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"rodada-1\",\n  \"gameId\": \"jogo-1\",\n  \"kind\": \"WIN\",\n  \"money\": {\n    \"amount\": \"30.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"{{chaveBet}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o resultado público desta etapa.",
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo 50.00 BRL\", () => pm.expect(resposta.balance).to.eql({\"amount\":\"50.00\",\"currency\":\"BRL\"}));",
+              "pm.test(\"Estado da operação\", () => pm.expect(resposta.status).to.eql(\"PROCESSED\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 — ROLLBACK do WIN",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{chaveRollbackWin}}"
+          }
+        ],
+        "url": "{{base}}/wagering/transactions",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"providerId\": \"avaliacao-reversoes\",\n  \"externalTransactionId\": \"{{chaveRollbackWin}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"rodada-1\",\n  \"gameId\": \"jogo-1\",\n  \"kind\": \"ROLLBACK\",\n  \"money\": {\n    \"amount\": \"30.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"{{chaveWin}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o resultado público desta etapa.",
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo 20.00 BRL\", () => pm.expect(resposta.balance).to.eql({\"amount\":\"20.00\",\"currency\":\"BRL\"}));",
+              "pm.test(\"Estado da operação\", () => pm.expect(resposta.status).to.eql(\"PROCESSED\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 — REFUND da BET",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{chaveRefund}}"
+          }
+        ],
+        "url": "{{base}}/wagering/transactions",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"providerId\": \"avaliacao-reversoes\",\n  \"externalTransactionId\": \"{{chaveRefund}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"rodada-1\",\n  \"gameId\": \"jogo-1\",\n  \"kind\": \"REFUND\",\n  \"money\": {\n    \"amount\": \"80.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"{{chaveBet}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o resultado público desta etapa.",
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo 100.00 BRL\", () => pm.expect(resposta.balance).to.eql({\"amount\":\"100.00\",\"currency\":\"BRL\"}));",
+              "pm.test(\"Estado da operação\", () => pm.expect(resposta.status).to.eql(\"PROCESSED\"));",
+              "pm.collectionVariables.set(\"refundId\", resposta.transactionId);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 — Rejeitar segunda reversão direta da BET",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{chaveDuplicada}}"
+          }
+        ],
+        "url": "{{base}}/wagering/transactions",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"providerId\": \"avaliacao-reversoes\",\n  \"externalTransactionId\": \"{{chaveDuplicada}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"rodada-1\",\n  \"gameId\": \"jogo-1\",\n  \"kind\": \"ROLLBACK\",\n  \"money\": {\n    \"amount\": \"80.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"{{chaveBet}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o resultado público desta etapa.",
+              "pm.test(\"HTTP 422\", () => pm.response.to.have.status(422));",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo 100.00 BRL\", () => pm.expect(resposta.balance).to.eql({\"amount\":\"100.00\",\"currency\":\"BRL\"}));",
+              "pm.test(\"Estado da operação\", () => pm.expect(resposta.status).to.eql(\"REJECTED\"));",
+              "pm.test(\"Código de rejeição\", () => pm.expect(resposta.failureCode).to.eql(\"ALREADY_REVERSED\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 — ROLLBACK do REFUND",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{chaveRollbackRefund}}"
+          }
+        ],
+        "url": "{{base}}/wagering/transactions",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"providerId\": \"avaliacao-reversoes\",\n  \"externalTransactionId\": \"{{chaveRollbackRefund}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"rodada-1\",\n  \"gameId\": \"jogo-1\",\n  \"kind\": \"ROLLBACK\",\n  \"money\": {\n    \"amount\": \"80.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"{{chaveRefund}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o resultado público desta etapa.",
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo 20.00 BRL\", () => pm.expect(resposta.balance).to.eql({\"amount\":\"20.00\",\"currency\":\"BRL\"}));",
+              "pm.test(\"Estado da operação\", () => pm.expect(resposta.status).to.eql(\"PROCESSED\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "09 — Replay histórico do REFUND",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{chaveRefund}}"
+          }
+        ],
+        "url": "{{base}}/wagering/transactions",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"providerId\": \"avaliacao-reversoes\",\n  \"externalTransactionId\": \"{{chaveRefund}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"rodada-1\",\n  \"gameId\": \"jogo-1\",\n  \"kind\": \"REFUND\",\n  \"money\": {\n    \"amount\": \"80.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"{{chaveBet}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o resultado público desta etapa.",
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo 100.00 BRL\", () => pm.expect(resposta.balance).to.eql({\"amount\":\"100.00\",\"currency\":\"BRL\"}));",
+              "pm.test(\"Estado da operação\", () => pm.expect(resposta.status).to.eql(\"PROCESSED\"));",
+              "pm.test(\"Replay sem novo crédito\", () => { pm.expect(resposta.idempotentReplay).to.eql(true); pm.expect(resposta.transactionId).to.eql(pm.collectionVariables.get(\"refundId\")); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 — Outra BET de 10 BRL",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{chaveOutraBet}}"
+          }
+        ],
+        "url": "{{base}}/wagering/transactions",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"providerId\": \"avaliacao-reversoes\",\n  \"externalTransactionId\": \"{{chaveOutraBet}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"rodada-1\",\n  \"gameId\": \"jogo-1\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"10.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o resultado público desta etapa.",
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo 10.00 BRL\", () => pm.expect(resposta.balance).to.eql({\"amount\":\"10.00\",\"currency\":\"BRL\"}));",
+              "pm.test(\"Estado da operação\", () => pm.expect(resposta.status).to.eql(\"PROCESSED\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 — ROLLBACK da outra BET",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{chaveRollbackBet}}"
+          }
+        ],
+        "url": "{{base}}/wagering/transactions",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"providerId\": \"avaliacao-reversoes\",\n  \"externalTransactionId\": \"{{chaveRollbackBet}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"rodada-1\",\n  \"gameId\": \"jogo-1\",\n  \"kind\": \"ROLLBACK\",\n  \"money\": {\n    \"amount\": \"10.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"{{chaveOutraBet}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o resultado público desta etapa.",
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo 20.00 BRL\", () => pm.expect(resposta.balance).to.eql({\"amount\":\"20.00\",\"currency\":\"BRL\"}));",
+              "pm.test(\"Estado da operação\", () => pm.expect(resposta.status).to.eql(\"PROCESSED\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "12 — Rejeitar reversão parcial",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{chaveIncompativel}}"
+          }
+        ],
+        "url": "{{base}}/wagering/transactions",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"providerId\": \"avaliacao-reversoes\",\n  \"externalTransactionId\": \"{{chaveIncompativel}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"rodada-1\",\n  \"gameId\": \"jogo-1\",\n  \"kind\": \"REFUND\",\n  \"money\": {\n    \"amount\": \"9.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"{{chaveOutraBet}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o resultado público desta etapa.",
+              "pm.test(\"HTTP 422\", () => pm.response.to.have.status(422));",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo 20.00 BRL\", () => pm.expect(resposta.balance).to.eql({\"amount\":\"20.00\",\"currency\":\"BRL\"}));",
+              "pm.test(\"Estado da operação\", () => pm.expect(resposta.status).to.eql(\"REJECTED\"));",
+              "pm.test(\"Código de rejeição\", () => pm.expect(resposta.failureCode).to.eql(\"REFERENCE_MISMATCH\"));",
+              "pm.collectionVariables.set(\"rejeitadaId\", resposta.transactionId);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "13 — Consultar saldo atual e versão",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base}}/wallets/{{walletId}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o resultado público desta etapa.",
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo atual 20 e versão 8\", () => { pm.expect(resposta.balance.amount).to.eql(\"20.00\"); pm.expect(resposta.version).to.eql(8); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "14 — Reconciliar oito lançamentos",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": "{{base}}/wallets/{{walletId}}/reconciliation"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o resultado público desta etapa.",
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Reconciliação consistente\", () => { pm.expect(resposta.consistent).to.eql(true); pm.expect(resposta.storedBalance.amount).to.eql(\"20.00\"); pm.expect(resposta.calculatedBalance.amount).to.eql(\"20.00\"); pm.expect(resposta.difference.amount).to.eql(\"0.00\"); pm.expect(resposta.checkedEntries).to.eql(8); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "15 — Consultar REFUND por ID interno",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base}}/wagering/transactions/{{refundId}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Verifica o estado público persistido sem reprocessar a operação.",
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "const resposta = pm.response.json();",
+              "pm.test(\"REFUND histórico\", () => { pm.expect(resposta.kind).to.eql(\"REFUND\"); pm.expect(resposta.status).to.eql(\"PROCESSED\"); pm.expect(resposta.balance.amount).to.eql(\"100.00\"); pm.expect(resposta.referenceExternalTransactionId).to.eql(pm.collectionVariables.get(\"chaveBet\")); });",
+              "pm.test(\"Sem campos internos\", () => { pm.expect(resposta).not.to.have.property(\"payloadHash\"); pm.expect(resposta).not.to.have.property(\"idempotencyKey\"); });",
+              "pm.collectionVariables.set(\"consultaRefund\", JSON.stringify(resposta));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "16 — Consultar o mesmo REFUND por ID externo",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base}}/providers/avaliacao-reversoes/wagering/transactions/{{chaveRefund}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Verifica o estado público persistido sem reprocessar a operação.",
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Mesma transação\", () => pm.expect(resposta).to.eql(JSON.parse(pm.collectionVariables.get(\"consultaRefund\"))));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "17 — Consultar transação rejeitada",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base}}/wagering/transactions/{{rejeitadaId}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Verifica o estado público persistido sem reprocessar a operação.",
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Rejeição consultável\", () => { pm.expect(resposta.status).to.eql(\"REJECTED\"); pm.expect(resposta.failureCode).to.eql(\"REFERENCE_MISMATCH\"); pm.expect(resposta.balance.amount).to.eql(\"20.00\"); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "18 — Consultar ID interno inexistente",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base}}/wagering/transactions/{{$guid}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Verifica o estado público persistido sem reprocessar a operação.",
+              "pm.test(\"HTTP 404\", () => pm.response.to.have.status(404));",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Ausência explícita\", () => pm.expect(resposta.message).to.eql(\"Transação não encontrada\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "19 — Recusar ID interno inválido",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base}}/wagering/transactions/nao-e-uuid"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Verifica o estado público persistido sem reprocessar a operação.",
+              "pm.test(\"HTTP 400\", () => pm.response.to.have.status(400));",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Formato inválido\", () => pm.expect(resposta.message).to.eql(\"transactionId deve ser um UUID\"));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

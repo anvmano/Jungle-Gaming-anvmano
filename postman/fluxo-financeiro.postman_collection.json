@@ -1,0 +1,430 @@
+{
+  "info": {
+    "name": "Jungle — Fluxo financeiro",
+    "description": "Rode as requisições em ordem. A abertura cria uma wallet e guarda os IDs para as próximas chamadas. No fim, a coleção testa uma aposta sem saldo e um conflito de chave. Os dados ficam no banco local.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "variable": [
+    {
+      "key": "base",
+      "value": "http://127.0.0.1:3001",
+      "type": "string"
+    },
+    {
+      "key": "outraReplica",
+      "value": "http://127.0.0.1:3002",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "01 — Verificar prontidão",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base}}/health/ready",
+        "description": "Confirma que a API consegue acessar o PostgreSQL e o SQS."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o contrato HTTP e o resultado esperado desta etapa.",
+              "pm.test(\"Status HTTP 200\", function () { pm.response.to.have.status(200); });",
+              "const resposta = pm.response.json();",
+              "pm.test(\"PostgreSQL e SQS disponíveis\", function () { pm.expect(resposta).to.eql({status:\"ok\",postgres:true,sqs:true}); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 — Abrir wallet com 100 BRL",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base}}/wallets",
+        "description": "Cria um jogador novo a cada execução e abre a wallet com versão 1.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"playerId\": \"{{playerId}}\",\n  \"initialBalance\": {\n    \"amount\": \"100.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Inicia uma avaliação independente e prepara as identidades usadas nas próximas requisições.",
+              "for (const nome of [\"playerId\", \"chaveBet\", \"chaveWin\", \"chaveLoss\", \"chaveRejeicao\"]) {",
+              "  pm.collectionVariables.set(nome, pm.variables.replaceIn(\"{{$guid}}\"));",
+              "}",
+              "pm.collectionVariables.unset(\"walletId\");"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o contrato HTTP e o resultado esperado desta etapa.",
+              "pm.test(\"Status HTTP 201\", function () { pm.response.to.have.status(201); });",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo 100.00 BRL\", function () { pm.expect(resposta.balance).to.eql({amount:\"100.00\",currency:\"BRL\"}); });",
+              "pm.collectionVariables.set(\"walletId\", resposta.id);",
+              "pm.test(\"Versão inicial\", function () { pm.expect(resposta.version).to.eql(1); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 — BET de 80 BRL",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{chaveBet}}"
+          }
+        ],
+        "url": "{{base}}/wagering/transactions",
+        "description": "Debita 80,00 BRL. O saldo da wallet passa de 100,00 para 20,00 BRL.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"providerId\": \"avaliacao-postman\",\n  \"externalTransactionId\": \"{{chaveBet}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"rodada-1\",\n  \"gameId\": \"jogo-1\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"80.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o contrato HTTP e o resultado esperado desta etapa.",
+              "pm.test(\"Status HTTP 200\", function () { pm.response.to.have.status(200); });",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo 20.00 BRL\", function () { pm.expect(resposta.balance).to.eql({amount:\"20.00\",currency:\"BRL\"}); });",
+              "pm.collectionVariables.set(\"transactionId\", resposta.transactionId);",
+              "pm.test(\"Operação aplicada\", function () { pm.expect(resposta.status).to.eql(\"PROCESSED\"); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 — Repetir BET em outra réplica",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{chaveBet}}"
+          }
+        ],
+        "url": "{{outraReplica}}/wagering/transactions",
+        "description": "Reenvia o corpo e a chave da aposta anterior pela porta 3002. A resposta traz a mesma transação e o saldo de 20,00 BRL.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"providerId\": \"avaliacao-postman\",\n  \"externalTransactionId\": \"{{chaveBet}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"rodada-1\",\n  \"gameId\": \"jogo-1\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"80.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o contrato HTTP e o resultado esperado desta etapa.",
+              "pm.test(\"Status HTTP 200\", function () { pm.response.to.have.status(200); });",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo 20.00 BRL\", function () { pm.expect(resposta.balance).to.eql({amount:\"20.00\",currency:\"BRL\"}); });",
+              "pm.test(\"Replay da mesma transação\", function () {",
+              "  pm.expect(resposta.idempotentReplay).to.eql(true);",
+              "  pm.expect(resposta.transactionId).to.eql(pm.collectionVariables.get(\"transactionId\"));",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 — WIN de 30 BRL",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{chaveWin}}"
+          }
+        ],
+        "url": "{{base}}/wagering/transactions",
+        "description": "Registra um prêmio sem referência e leva o saldo a 50,00 BRL.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"providerId\": \"avaliacao-postman\",\n  \"externalTransactionId\": \"{{chaveWin}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"rodada-1\",\n  \"gameId\": \"jogo-1\",\n  \"kind\": \"WIN\",\n  \"money\": {\n    \"amount\": \"30.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o contrato HTTP e o resultado esperado desta etapa.",
+              "pm.test(\"Status HTTP 200\", function () { pm.response.to.have.status(200); });",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo 50.00 BRL\", function () { pm.expect(resposta.balance).to.eql({amount:\"50.00\",currency:\"BRL\"}); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 — LOSS de zero",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{chaveLoss}}"
+          }
+        ],
+        "url": "{{base}}/wagering/transactions",
+        "description": "Registra a perda com valor zero. O saldo continua em 50,00 BRL.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"providerId\": \"avaliacao-postman\",\n  \"externalTransactionId\": \"{{chaveLoss}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"rodada-1\",\n  \"gameId\": \"jogo-1\",\n  \"kind\": \"LOSS\",\n  \"money\": {\n    \"amount\": \"0.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o contrato HTTP e o resultado esperado desta etapa.",
+              "pm.test(\"Status HTTP 200\", function () { pm.response.to.have.status(200); });",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo 50.00 BRL\", function () { pm.expect(resposta.balance).to.eql({amount:\"50.00\",currency:\"BRL\"}); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 — Consultar saldo e versão",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base}}/wallets/{{walletId}}",
+        "description": "O saldo deve estar em 50,00 BRL e a versão deve ser 3. A BET e o WIN foram as duas mudanças depois da abertura."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o contrato HTTP e o resultado esperado desta etapa.",
+              "pm.test(\"Status HTTP 200\", function () { pm.response.to.have.status(200); });",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo 50.00 BRL\", function () { pm.expect(resposta.balance).to.eql({amount:\"50.00\",currency:\"BRL\"}); });",
+              "pm.test(\"Somente BET e WIN aumentaram a versão\", function () { pm.expect(resposta.version).to.eql(3); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 — Consultar ledger",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base}}/wallets/{{walletId}}/ledger?limit=50",
+        "description": "O ledger deve trazer três lançamentos, um da abertura, um da BET e um do WIN."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o contrato HTTP e o resultado esperado desta etapa.",
+              "pm.test(\"Status HTTP 200\", function () { pm.response.to.have.status(200); });",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Abertura, aposta e prêmio geram três lançamentos\", function () {",
+              "  pm.expect(resposta.entries).to.have.lengthOf(3);",
+              "  pm.expect(resposta.nextCursor).to.eql(null);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "09 — Reconciliar saldo",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": "{{base}}/wallets/{{walletId}}/reconciliation",
+        "description": "Compara o saldo de 50,00 BRL com a soma dos lançamentos. A diferença esperada é zero."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o contrato HTTP e o resultado esperado desta etapa.",
+              "pm.test(\"Status HTTP 200\", function () { pm.response.to.have.status(200); });",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo reconciliado em 50 BRL\", function () {",
+              "  pm.expect(resposta.consistent).to.eql(true);",
+              "  pm.expect(resposta.storedBalance.amount).to.eql(\"50.00\");",
+              "  pm.expect(resposta.difference.amount).to.eql(\"0.00\");",
+              "  pm.expect(resposta.checkedEntries).to.eql(3);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 — Rejeitar BET sem saldo",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{chaveRejeicao}}"
+          }
+        ],
+        "url": "{{base}}/wagering/transactions",
+        "description": "Tenta apostar 80,00 BRL com 50,00 BRL disponíveis. O HTTP 422 é esperado e o saldo continua igual.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"providerId\": \"avaliacao-postman\",\n  \"externalTransactionId\": \"{{chaveRejeicao}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"rodada-1\",\n  \"gameId\": \"jogo-1\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"80.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o contrato HTTP e o resultado esperado desta etapa.",
+              "pm.test(\"Status HTTP 422\", function () { pm.response.to.have.status(422); });",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Saldo 50.00 BRL\", function () { pm.expect(resposta.balance).to.eql({amount:\"50.00\",currency:\"BRL\"}); });",
+              "pm.test(\"Rejeição por saldo insuficiente\", function () { pm.expect(resposta.failureCode).to.eql(\"INSUFFICIENT_FUNDS\"); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 — Detectar conflito de chave",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{chaveBet}}"
+          }
+        ],
+        "url": "{{base}}/wagering/transactions",
+        "description": "Reusa a chave da primeira BET com um valor diferente. A API deve retornar HTTP 409 com IDEMPOTENCY_CONFLICT.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"providerId\": \"avaliacao-postman\",\n  \"externalTransactionId\": \"{{chaveBet}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"rodada-1\",\n  \"gameId\": \"jogo-1\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"70.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Confere o contrato HTTP e o resultado esperado desta etapa.",
+              "pm.test(\"Status HTTP 409\", function () { pm.response.to.have.status(409); });",
+              "const resposta = pm.response.json();",
+              "pm.test(\"Conflito de conteúdo\", function () { pm.expect(resposta.failureCode).to.eql(\"IDEMPOTENCY_CONFLICT\"); });"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

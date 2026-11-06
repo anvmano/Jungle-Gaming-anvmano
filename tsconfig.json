@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    // Habilita checagem estrita e os decoradores usados pelo NestJS.
+    "target": "ES2022",
+    "module": "Preserve",
+    "moduleResolution": "bundler",
+    "types": [
+      "bun"
+    ],
+    "strict": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  }
+}

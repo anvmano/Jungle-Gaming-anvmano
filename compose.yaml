@@ -1,0 +1,81 @@
+name: jungle
+
+services:
+  # Aplica as migrações antes de iniciar as réplicas.
+  migrador:
+    image: jungle-app:local
+    build: .
+    command: ["sh", "-c", "bun run preparar:banco-local && bun run migrar:aplicar && bun run preparar:filas"]
+    environment:
+      URL_BANCO_MIGRACOES: postgresql://jungle_admin:jungle_dev_only@postgres:5432/jungle
+      SENHA_BANCO_APLICACAO: jungle_app_dev_only
+      URL_SQS: http://ministack:4566
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ministack:
+        condition: service_healthy
+
+  # As réplicas compartilham a imagem, o PostgreSQL e o MiniStack.
+  app:
+    image: jungle-app:local
+    pull_policy: never
+    scale: 3
+    environment:
+      URL_BANCO: postgresql://jungle_app:jungle_app_dev_only@postgres:5432/jungle
+      URL_SQS: http://ministack:4566
+      MENSAGERIA_ATIVA: "true"
+      # As três réplicas retomam pendências; o banco distribui as wallets livres.
+      REFERENCIAS_ATIVAS: "true"
+      REFERENCIAS_ATRASO_INICIAL_MS: "1000"
+      REFERENCIAS_ATRASO_MAXIMO_MS: "60000"
+      REFERENCIAS_TTL_MS: "900000"
+      REFERENCIAS_INTERVALO_MS: "200"
+    ports:
+      - "127.0.0.1:3001-3003:3000"
+    depends_on:
+      migrador:
+        condition: service_completed_successfully
+      ministack:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const res = await fetch('http://127.0.0.1:3000/health/live'); if (!res.ok) process.exit(1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+
+  postgres:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_DB: jungle
+      POSTGRES_USER: jungle_admin
+      POSTGRES_PASSWORD: jungle_dev_only
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jungle_admin -d jungle"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  ministack:
+    image: ministackorg/ministack:1.5.37
+    environment:
+      MINISTACK_REGION: us-east-1
+      PERSIST_STATE: "1"
+    ports:
+      - "127.0.0.1:4566:4566"
+    volumes:
+      - ministack_data:/tmp/ministack-state
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4566/_ministack/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+# Preserva os dados quando os contêineres são recriados.
+volumes:
+  postgres_data:
+  ministack_data:
